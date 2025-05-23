@@ -1,10 +1,10 @@
 from datetime import datetime
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import Column, Integer, String, DateTime, Boolean
-from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
+from backend.models import Base
 
-Base = declarative_base()
+
 
 class User(Base):
     """User model for authentication and video ownership"""
@@ -19,8 +19,8 @@ class User(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     is_active = Column(Boolean, default=True)
     
-    # Relationships - Note: This will work once Video model is imported
-    # videos = relationship('Video', back_populates='user', cascade='all, delete-orphan')
+    # ✅ Relationships - works now that Video model exists
+    videos = relationship('Video', back_populates='user', cascade='all, delete-orphan')
     
     def set_password(self, password):
         """Hash and set the user's password"""
