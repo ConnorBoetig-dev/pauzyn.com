@@ -3,6 +3,9 @@ from functools import wraps
 from backend.models.user import User
 from backend.utils.database import get_db_session
 import re
+import logging
+
+logger = logging.getLogger(__name__)
 
 auth_bp = Blueprint('auth', __name__)
 
@@ -82,12 +85,15 @@ def register():
             db.add(new_user)
             db.commit()
             
+            logger.info(f"New user registered: {email}")
+            
             return jsonify({
                 'message': 'User registered successfully',
                 'user': new_user.to_dict()
             }), 201
             
     except Exception as e:
+        logger.error(f"Registration error: {str(e)}")
         return jsonify({'error': f'Registration failed: {str(e)}'}), 500
 
 @auth_bp.route('/login', methods=['POST'])
@@ -119,12 +125,15 @@ def login():
             session['email'] = user.email
             session.permanent = True
             
+            logger.info(f"User logged in: {email}")
+            
             return jsonify({
                 'message': 'Login successful',
                 'user': user.to_dict()
             }), 200
             
     except Exception as e:
+        logger.error(f"Login error: {str(e)}")
         return jsonify({'error': f'Login failed: {str(e)}'}), 500
 
 @auth_bp.route('/logout', methods=['POST'])
@@ -132,9 +141,12 @@ def login():
 def logout():
     """Logout user"""
     try:
+        user_id = session.get('user_id')
         session.clear()
+        logger.info(f"User logged out: {user_id}")
         return jsonify({'message': 'Logged out successfully'}), 200
     except Exception as e:
+        logger.error(f"Logout error: {str(e)}")
         return jsonify({'error': f'Logout failed: {str(e)}'}), 500
 
 @auth_bp.route('/profile', methods=['GET'])
@@ -151,6 +163,7 @@ def get_profile():
             return jsonify({'user': user.to_dict()}), 200
             
     except Exception as e:
+        logger.error(f"Profile fetch error: {str(e)}")
         return jsonify({'error': f'Failed to get profile: {str(e)}'}), 500
 
 @auth_bp.route('/profile', methods=['PUT'])
@@ -178,12 +191,15 @@ def update_profile():
             
             db.commit()
             
+            logger.info(f"Profile updated for user: {user.email}")
+            
             return jsonify({
                 'message': 'Profile updated successfully',
                 'user': user.to_dict()
             }), 200
             
     except Exception as e:
+        logger.error(f"Profile update error: {str(e)}")
         return jsonify({'error': f'Failed to update profile: {str(e)}'}), 500
 
 @auth_bp.route('/check', methods=['GET'])

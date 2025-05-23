@@ -1,19 +1,11 @@
 import os
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, scoped_session
 from sqlalchemy.pool import NullPool
 from contextlib import contextmanager
-try:
-    from backend.models.user import Base as UserBase
-except ImportError:
-    from sqlalchemy.ext.declarative import declarative_base
-    UserBase = declarative_base()
+import logging
 
-try:
-    from backend.models.video import Base as VideoBase
-except ImportError:
-    from sqlalchemy.ext.declarative import declarative_base
-    VideoBase = declarative_base()
+logger = logging.getLogger(__name__)
 
 # Get database URL from environment
 DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://localhost/video_gallery')
@@ -33,21 +25,45 @@ Session = scoped_session(SessionFactory)
 
 def init_db():
     """Initialize database tables"""
-    # Import all models to ensure they're registered
-    from backend.models.user import User
-    from backend.models.video import Video
-    
-    # Create all tables
-    UserBase.metadata.create_all(engine)
-    VideoBase.metadata.create_all(engine)
-    
-    print("Database tables created successfully!")
+    try:
+        # Import all models to ensure they're registered
+        from backend.models.user import Base as UserBase, User
+        from backend.models.video import Base as VideoBase, Video
+        
+        # Create all tables
+        UserBase.metadata.create_all(engine)
+        VideoBase.metadata.create_all(engine)
+        
+        logger.info("Database tables created successfully!")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to initialize database: {str(e)}")
+        return False
+
+def test_connection():
+    """Test database connection"""
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT 1"))
+            result.fetchone()
+        logger.info("Database connection successful")
+        return True
+    except Exception as e:
+        logger.error(f"Database connection failed: {str(e)}")
+        return False
 
 def drop_db():
     """Drop all database tables (use with caution!)"""
-    UserBase.metadata.drop_all(engine)
-    VideoBase.metadata.drop_all(engine)
-    print("Database tables dropped!")
+    try:
+        from backend.models.user import Base as UserBase
+        from backend.models.video import Base as VideoBase
+        
+        UserBase.metadata.drop_all(engine)
+        VideoBase.metadata.drop_all(engine)
+        logger.info("Database tables dropped!")
+    except Exception as e:
+        logger.error(f"Failed to drop database tables: {str(e)}")
+        raise
 
 @contextmanager
 def get_db_session():
@@ -65,6 +81,7 @@ def get_db_session():
         session.commit()
     except Exception as e:
         session.rollback()
+        logger.error(f"Database session error: {str(e)}")
         raise e
     finally:
         session.close()
@@ -90,27 +107,43 @@ def get_db():
 # Utility functions for common queries
 def get_user_by_email(email):
     """Get user by email address"""
-    with get_db_session() as session:
-        from backend.models.user import User
-        return session.query(User).filter(User.email == email).first()
+    try:
+        with get_db_session() as session:
+            from backend.models.user import User
+            return session.query(User).filter(User.email == email).first()
+    except Exception as e:
+        logger.error(f"Error fetching user by email: {str(e)}")
+        return None
 
 def get_user_by_id(user_id):
     """Get user by ID"""
-    with get_db_session() as session:
-        from backend.models.user import User
-        return session.query(User).filter(User.id == user_id).first()
+    try:
+        with get_db_session() as session:
+            from backend.models.user import User
+            return session.query(User).filter(User.id == user_id).first()
+    except Exception as e:
+        logger.error(f"Error fetching user by ID: {str(e)}")
+        return None
 
 def get_video_by_id(video_id):
     """Get video by ID"""
-    with get_db_session() as session:
-        from backend.models.video import Video
-        return session.query(Video).filter(Video.id == video_id).first()
+    try:
+        with get_db_session() as session:
+            from backend.models.video import Video
+            return session.query(Video).filter(Video.id == video_id).first()
+    except Exception as e:
+        logger.error(f"Error fetching video by ID: {str(e)}")
+        return None
 
 def get_user_videos(user_id, limit=None):
     """Get all videos for a user"""
-    with get_db_session() as session:
-        from backend.models.video import Video
-        query = session.query(Video).filter(Video.user_id == user_id)
-        if limit:
-            query = query.limit(limit)
-        return query.all()
+    try:
+        with get_db_session() as session:
+            from backend.models.video import Video
+            query = session.query(Video).filter(Video.user_id == user_id)
+            if limit:
+                query = query.limit(limit)
+            return query.all()
+    except Exception as e:
+        logger.error(f"Error fetching user videos: {str(e)}")
+        return []

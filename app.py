@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template, session
+from flask import Flask, request, jsonify, render_template, session, current_app
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit, join_room, leave_room
 import os
@@ -25,12 +25,16 @@ app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
 app.config['SESSION_COOKIE_SECURE'] = os.getenv('FLASK_ENV') == 'production'
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['UPLOAD_FOLDER'] = os.path.join(os.getcwd(), 'temp')
 
 # Enable CORS for frontend communication
 CORS(app, supports_credentials=True, origins=["http://localhost:3000", "http://localhost:5000", "http://127.0.0.1:5000"])
 
 # WebSocket support for real-time updates
 socketio = SocketIO(app, cors_allowed_origins="*", logger=True, engineio_logger=True)
+
+# Make socketio available globally for Celery tasks
+app.socketio = socketio
 
 # Import and register blueprints
 try:
@@ -41,9 +45,9 @@ try:
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(upload_bp, url_prefix='/api/videos')
     app.register_blueprint(search_bp, url_prefix='/api/search')
+    logger.info("All blueprints registered successfully")
 except ImportError as e:
     logger.error(f"Failed to import routes: {e}")
-    # Continue without routes for now
 
 # Basic routes
 @app.route('/')
@@ -53,9 +57,24 @@ def index():
         "status": "running",
         "version": "1.0.0",
         "endpoints": {
-            "auth": "/api/auth/*",
-            "videos": "/api/videos/*",
-            "search": "/api/search/*",
+            "auth": {
+                "register": "POST /api/auth/register",
+                "login": "POST /api/auth/login",
+                "logout": "POST /api/auth/logout",
+                "profile": "GET /api/auth/profile",
+                "check": "GET /api/auth/check"
+            },
+            "videos": {
+                "upload": "POST /api/videos/upload",
+                "list": "GET /api/videos",
+                "get": "GET /api/videos/:id",
+                "delete": "DELETE /api/videos/:id",
+                "status": "GET /api/videos/:id/status"
+            },
+            "search": {
+                "search": "POST /api/search",
+                "suggestions": "GET /api/search/suggestions"
+            },
             "health": "/api/health"
         }
     })
@@ -63,20 +82,46 @@ def index():
 @app.route('/api/health')
 def health_check():
     """Health check endpoint for monitoring"""
-    try:
-        # Check database connection
-        from backend.utils.database import engine
-        with engine.connect() as conn:
-            conn.execute("SELECT 1")
-        db_status = "healthy"
-    except Exception as e:
-        db_status = f"unhealthy: {str(e)}"
-    
-    return jsonify({
+    health_status = {
         "status": "healthy",
-        "database": db_status,
-        "uptime": "running"
-    })
+        "services": {}
+    }
+    
+    # Check database connection
+    try:
+        from backend.utils.database import test_connection
+        db_healthy = test_connection()
+        health_status["services"]["database"] = "healthy" if db_healthy else "unhealthy"
+    except Exception as e:
+        health_status["services"]["database"] = f"unhealthy: {str(e)}"
+    
+    # Check Redis connection
+    try:
+        import redis
+        r = redis.from_url(os.getenv('REDIS_URL', 'redis://localhost:6379/0'))
+        r.ping()
+        health_status["services"]["redis"] = "healthy"
+    except Exception as e:
+        health_status["services"]["redis"] = f"unhealthy: {str(e)}"
+    
+    # Check AWS connectivity
+    try:
+        from backend.services.aws_service import aws_service
+        # Just check if we can create the client
+        if aws_service.s3_client:
+            health_status["services"]["aws"] = "configured"
+        else:
+            health_status["services"]["aws"] = "not configured"
+    except Exception as e:
+        health_status["services"]["aws"] = f"error: {str(e)}"
+    
+    # Overall health
+    all_healthy = all(
+        "healthy" in str(status) or "configured" in str(status) 
+        for status in health_status["services"].values()
+    )
+    
+    return jsonify(health_status), 200 if all_healthy else 503
 
 # WebSocket events for real-time updates
 @socketio.on('connect')
@@ -116,12 +161,28 @@ def handle_processing_status(data):
     user_id = data.get('user_id')
     
     if video_id and user_id:
-        # TODO: Get actual status from database
-        emit('status_update', {
-            'video_id': video_id,
-            'status': 'processing',
-            'progress': 45
-        })
+        try:
+            from backend.utils.database import get_video_by_id
+            video = get_video_by_id(video_id)
+            
+            if video and video.user_id == user_id:
+                emit('status_update', {
+                    'video_id': video_id,
+                    'status': video.status,
+                    'error_message': video.error_message
+                })
+            else:
+                emit('status_update', {
+                    'video_id': video_id,
+                    'status': 'not_found'
+                })
+        except Exception as e:
+            logger.error(f"Error getting video status: {str(e)}")
+            emit('status_update', {
+                'video_id': video_id,
+                'status': 'error',
+                'error': str(e)
+            })
 
 # Error handlers
 @app.errorhandler(404)
@@ -141,11 +202,16 @@ def file_too_large(error):
 def create_app():
     """Application factory pattern"""
     with app.app_context():
+        # Create upload directory
+        os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+        
         # Initialize database tables
         try:
             from backend.utils.database import init_db
-            init_db()
-            logger.info("Database initialized successfully")
+            if init_db():
+                logger.info("Database initialized successfully")
+            else:
+                logger.warning("Database initialization had issues")
         except Exception as e:
             logger.error(f"Failed to initialize database: {str(e)}")
             logger.info("Continuing without database initialization...")

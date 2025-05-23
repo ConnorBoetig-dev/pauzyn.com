@@ -19,8 +19,8 @@ class User(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     is_active = Column(Boolean, default=True)
     
-    # Relationships
-    videos = relationship('Video', back_populates='user', cascade='all, delete-orphan')
+    # Relationships - Note: This will work once Video model is imported
+    # videos = relationship('Video', back_populates='user', cascade='all, delete-orphan')
     
     def set_password(self, password):
         """Hash and set the user's password"""
