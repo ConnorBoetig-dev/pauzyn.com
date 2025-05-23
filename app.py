@@ -2,9 +2,13 @@ from flask import Flask, request, jsonify, render_template, session
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit, join_room, leave_room
 import os
+import sys
 from dotenv import load_dotenv
 from datetime import timedelta
 import logging
+
+# Add the parent directory to Python path to fix imports
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Load environment variables
 load_dotenv()
@@ -23,22 +27,23 @@ app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 
 # Enable CORS for frontend communication
-CORS(app, supports_credentials=True, origins=["http://localhost:3000", "http://localhost:5000"])
+CORS(app, supports_credentials=True, origins=["http://localhost:3000", "http://localhost:5000", "http://127.0.0.1:5000"])
 
 # WebSocket support for real-time updates
 socketio = SocketIO(app, cors_allowed_origins="*", logger=True, engineio_logger=True)
 
 # Import and register blueprints
-from backend.routes.auth import auth_bp
-from backend.routes.upload import upload_bp
-from backend.routes.search import search_bp
-
-app.register_blueprint(auth_bp, url_prefix='/api/auth')
-app.register_blueprint(upload_bp, url_prefix='/api/videos')
-app.register_blueprint(search_bp, url_prefix='/api/search')
-
-# Initialize database
-from backend.utils.database import init_db
+try:
+    from backend.routes.auth import auth_bp
+    from backend.routes.upload import upload_bp
+    from backend.routes.search import search_bp
+    
+    app.register_blueprint(auth_bp, url_prefix='/api/auth')
+    app.register_blueprint(upload_bp, url_prefix='/api/videos')
+    app.register_blueprint(search_bp, url_prefix='/api/search')
+except ImportError as e:
+    logger.error(f"Failed to import routes: {e}")
+    # Continue without routes for now
 
 # Basic routes
 @app.route('/')
@@ -61,7 +66,8 @@ def health_check():
     try:
         # Check database connection
         from backend.utils.database import engine
-        engine.execute("SELECT 1")
+        with engine.connect() as conn:
+            conn.execute("SELECT 1")
         db_status = "healthy"
     except Exception as e:
         db_status = f"unhealthy: {str(e)}"
@@ -137,10 +143,12 @@ def create_app():
     with app.app_context():
         # Initialize database tables
         try:
+            from backend.utils.database import init_db
             init_db()
             logger.info("Database initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize database: {str(e)}")
+            logger.info("Continuing without database initialization...")
     
     return app
 

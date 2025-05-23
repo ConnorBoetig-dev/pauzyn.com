@@ -101,4 +101,4 @@ class Video(Base):
         }
     
     def __repr__(self):
-        return f'<Video {self.title}>'"
+        return f'<Video {self.title}>'

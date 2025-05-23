@@ -3,8 +3,17 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, scoped_session
 from sqlalchemy.pool import NullPool
 from contextlib import contextmanager
-from backend.models.user import Base as UserBase
-from backend.models.video import Base as VideoBase
+try:
+    from backend.models.user import Base as UserBase
+except ImportError:
+    from sqlalchemy.ext.declarative import declarative_base
+    UserBase = declarative_base()
+
+try:
+    from backend.models.video import Base as VideoBase
+except ImportError:
+    from sqlalchemy.ext.declarative import declarative_base
+    VideoBase = declarative_base()
 
 # Get database URL from environment
 DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://localhost/video_gallery')
@@ -104,4 +113,4 @@ def get_user_videos(user_id, limit=None):
         query = session.query(Video).filter(Video.user_id == user_id)
         if limit:
             query = query.limit(limit)
-        return query.all()"
+        return query.all()
