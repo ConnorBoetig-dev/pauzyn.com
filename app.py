@@ -1,74 +1,157 @@
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template, session
 from flask_cors import CORS
-from flask_socketio import SocketIO
+from flask_socketio import SocketIO, emit, join_room, leave_room
 import os
 from dotenv import load_dotenv
+from datetime import timedelta
+import logging
 
 # Load environment variables
 load_dotenv()
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Initialize Flask app
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key-here')
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB max file size
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
+app.config['SESSION_COOKIE_SECURE'] = os.getenv('FLASK_ENV') == 'production'
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 
 # Enable CORS for frontend communication
-CORS(app)
+CORS(app, supports_credentials=True, origins=["http://localhost:3000", "http://localhost:5000"])
 
 # WebSocket support for real-time updates
-socketio = SocketIO(app, cors_allowed_origins="*")
+socketio = SocketIO(app, cors_allowed_origins="*", logger=True, engineio_logger=True)
+
+# Import and register blueprints
+from backend.routes.auth import auth_bp
+from backend.routes.upload import upload_bp
+from backend.routes.search import search_bp
+
+app.register_blueprint(auth_bp, url_prefix='/api/auth')
+app.register_blueprint(upload_bp, url_prefix='/api/videos')
+app.register_blueprint(search_bp, url_prefix='/api/search')
+
+# Initialize database
+from backend.utils.database import init_db
 
 # Basic routes
 @app.route('/')
 def index():
-    return jsonify({"message": "AI Video Gallery API", "status": "running"})
+    return jsonify({
+        "message": "AI Video Gallery API",
+        "status": "running",
+        "version": "1.0.0",
+        "endpoints": {
+            "auth": "/api/auth/*",
+            "videos": "/api/videos/*",
+            "search": "/api/search/*",
+            "health": "/api/health"
+        }
+    })
 
 @app.route('/api/health')
 def health_check():
-    return jsonify({"status": "healthy"})
-
-# Authentication routes
-@app.route('/api/auth/register', methods=['POST'])
-def register():
-    data = request.get_json()
-    # TODO: Implement user registration
-    return jsonify({"message": "Registration endpoint"})
-
-@app.route('/api/auth/login', methods=['POST'])
-def login():
-    data = request.get_json()
-    # TODO: Implement user login
-    return jsonify({"message": "Login endpoint"})
-
-# Upload routes
-@app.route('/api/upload', methods=['POST'])
-def upload_video():
-    if 'video' not in request.files:
-        return jsonify({"error": "No video file provided"}), 400
+    """Health check endpoint for monitoring"""
+    try:
+        # Check database connection
+        from backend.utils.database import engine
+        engine.execute("SELECT 1")
+        db_status = "healthy"
+    except Exception as e:
+        db_status = f"unhealthy: {str(e)}"
     
-    file = request.files['video']
-    if file.filename == '':
-        return jsonify({"error": "No file selected"}), 400
-    
-    # TODO: Implement video upload to S3 and trigger processing
-    return jsonify({"message": "Upload endpoint", "filename": file.filename})
+    return jsonify({
+        "status": "healthy",
+        "database": db_status,
+        "uptime": "running"
+    })
 
-# Search routes
-@app.route('/api/search', methods=['POST'])
-def search_videos():
-    data = request.get_json()
-    query = data.get('query', '')
-    
-    # TODO: Implement vector search
-    return jsonify({"message": "Search endpoint", "query": query})
-
-# WebSocket events
+# WebSocket events for real-time updates
 @socketio.on('connect')
 def handle_connect():
-    print('Client connected')
+    """Handle client connection"""
+    logger.info(f'Client connected: {request.sid}')
+    emit('connected', {'message': 'Successfully connected to server'})
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    print('Client disconnected')
+    """Handle client disconnection"""
+    logger.info(f'Client disconnected: {request.sid}')
+
+@socketio.on('join_user_room')
+def handle_join_user_room(data):
+    """Join user-specific room for personalized updates"""
+    user_id = data.get('user_id')
+    if user_id:
+        room = f'user_{user_id}'
+        join_room(room)
+        logger.info(f'User {user_id} joined room: {room}')
+        emit('joined_room', {'room': room})
+
+@socketio.on('leave_user_room')
+def handle_leave_user_room(data):
+    """Leave user-specific room"""
+    user_id = data.get('user_id')
+    if user_id:
+        room = f'user_{user_id}'
+        leave_room(room)
+        logger.info(f'User {user_id} left room: {room}')
+
+@socketio.on('processing_status')
+def handle_processing_status(data):
+    """Request processing status for a video"""
+    video_id = data.get('video_id')
+    user_id = data.get('user_id')
+    
+    if video_id and user_id:
+        # TODO: Get actual status from database
+        emit('status_update', {
+            'video_id': video_id,
+            'status': 'processing',
+            'progress': 45
+        })
+
+# Error handlers
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({'error': 'Endpoint not found'}), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    logger.error(f'Internal server error: {str(error)}')
+    return jsonify({'error': 'Internal server error'}), 500
+
+@app.errorhandler(413)
+def file_too_large(error):
+    return jsonify({'error': 'File too large. Maximum size is 500MB'}), 413
+
+# Initialize the app
+def create_app():
+    """Application factory pattern"""
+    with app.app_context():
+        # Initialize database tables
+        try:
+            init_db()
+            logger.info("Database initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize database: {str(e)}")
+    
+    return app
 
 if __name__ == '__main__':
-    socketio.run(app, debug=True, host='0.0.0.0', port=5000)
+    # Create the application
+    app = create_app()
+    
+    # Run with SocketIO
+    socketio.run(
+        app, 
+        debug=os.getenv('DEBUG', 'True').lower() == 'true',
+        host='0.0.0.0',
+        port=int(os.getenv('PORT', 5000))
+    )
